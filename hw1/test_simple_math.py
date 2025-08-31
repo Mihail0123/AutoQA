@@ -1,5 +1,5 @@
 import pytest
-from HW1.simple_math import SimpleMath
+from hw1.simple_math import SimpleMath
 
 @pytest.fixture
 def math_obj():
