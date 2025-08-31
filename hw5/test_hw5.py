@@ -1,4 +1,3 @@
-# hw5/test_hw5.py
 import os
 import time
 import pytest
@@ -6,12 +5,13 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait as W
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
 
-def W(d, t=15): return WebDriverWait(d, t)
+def webwait(d, t=15):
+    return W(d, t)
 
 
 @pytest.fixture
@@ -27,42 +27,63 @@ def driver():
 
 
 def accept_cookies(d):
-    for xp in [
-        "//button[normalize-space()='Accept']",
-        "//*[@id='accept' or contains(@id,'accept') or contains(@class,'accept')]",
-        "//button[contains(translate(.,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'accept')]",
-        "//button[normalize-space()='OK' or normalize-space()='Ok']",
-    ]:
-        try:
-            W(d, 2).until(EC.element_to_be_clickable((By.XPATH, xp))).click()
+    keys = ("accept", "agree", "ok", "got it", "allow")
+    for el in d.find_elements(By.CSS_SELECTOR, "button, a, [role='button']"):
+        text = (el.text or el.get_attribute("aria-label") or "").strip().lower()
+        idcl = f"{el.get_attribute('id') or ''} {el.get_attribute('class') or ''}".lower()
+        if any(k in text for k in keys) or "accept" in idcl or "cookie" in idcl:
+            try:
+                el.click()
+            except Exception:
+                d.execute_script("arguments[0].click()", el)
             break
-        except Exception:
-            pass
 
 
-def body_text(d):
+def has_text_in_frames(d, needle: str, depth: int = 4) -> bool:
+    js = """
+    const needle = (arguments[0]||'').toLowerCase();
+    const maxDepth = arguments[1]>>>0;
+    function scan(win, dep){
+      try{
+        const txt = (win.document && win.document.body && win.document.body.innerText || '').toLowerCase();
+        if(txt.includes(needle)) return true;
+      }catch(e){}
+      if(dep<=0) return false;
+      try{
+        const ifr = win.document ? win.document.getElementsByTagName('iframe') : [];
+        for(let i=0;i<ifr.length;i++){
+          try{
+            const w = ifr[i].contentWindow;
+            if(w && scan(w, dep-1)) return true;
+          }catch(e){}
+        }
+      }catch(e){}
+      return false;
+    }
+    return scan(window, maxDepth);
+    """
     try:
-        return (d.execute_script("return document.body && document.body.innerText || ''") or "").lower()
+        return bool(d.execute_script(js, needle.lower(), int(depth)))
     except Exception:
-        return ""
-
-
-def find_text_in_frames(d, needle, depth=3):
-    if needle in body_text(d): return True
-    if depth <= 0: return False
-    for fr in d.find_elements(By.TAG_NAME, "iframe"):
-        try:
-            d.switch_to.frame(fr)
-            if find_text_in_frames(d, needle, depth - 1): return True
-        finally:
-            d.switch_to.parent_frame()
-    return False
+        return False
 
 
 def test_iframe_text_presence(driver):
     driver.get("https://bonigarcia.dev/selenium-webdriver-java/iframes.html")
-    W(driver, 10).until(EC.presence_of_all_elements_located((By.TAG_NAME, "iframe")))
-    assert find_text_in_frames(driver, "semper posuere integer", 4)
+    webwait(driver, 15).until(lambda x: has_text_in_frames(x, "semper posuere integer", 4))
+
+
+def _click_photo_tab(d):
+    try:
+        webwait(d, 3).until(EC.element_to_be_clickable((By.LINK_TEXT, "Photo Manager"))).click()
+        return True
+    except Exception:
+        pass
+    try:
+        webwait(d, 2).until(EC.element_to_be_clickable((By.PARTIAL_LINK_TEXT, "Photo"))).click()
+        return True
+    except Exception:
+        return False
 
 
 def find_photo_iframe(d, timeout=15):
@@ -77,24 +98,12 @@ def find_photo_iframe(d, timeout=15):
                 if d.find_elements(By.CSS_SELECTOR, "#gallery") and d.find_elements(By.CSS_SELECTOR, "#trash"):
                     d.switch_to.default_content()
                     return f
-            except Exception:
+            finally:
                 d.switch_to.default_content()
-        d.switch_to.default_content()
         if not clicked:
-            for xp in [
-                "//a[contains(.,'Photo Manager')]",
-                "//a[contains(translate(.,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'photo')]",
-            ]:
-                try:
-                    el = WebDriverWait(d, 2).until(EC.element_to_be_clickable((By.XPATH, xp)))
-                    d.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-                    el.click()
-                    clicked = True
-                    break
-                except Exception:
-                    continue
+            clicked = _click_photo_tab(d)
         d.execute_script("window.scrollBy(0,600);")
-        time.sleep(0.3)
+        time.sleep(0.25)
     pytest.fail("photo iframe not found")
 
 
@@ -105,8 +114,8 @@ def test_drag_and_drop_photo_to_trash(driver):
     iframe = find_photo_iframe(driver)
     driver.switch_to.frame(iframe)
 
-    W(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "#gallery")))
-    W(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "#trash")))
+    webwait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "#gallery")))
+    webwait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "#trash")))
 
     items = driver.find_elements(By.CSS_SELECTOR, "#gallery > li")
     assert len(items) >= 4
@@ -116,12 +125,15 @@ def test_drag_and_drop_photo_to_trash(driver):
     driver.execute_script("arguments[1].appendChild(arguments[0]);", src, dst)
 
     def counts():
-        return len(driver.find_elements(By.CSS_SELECTOR, "#trash li")), len(driver.find_elements(By.CSS_SELECTOR, "#gallery li"))
+        t = len(driver.find_elements(By.CSS_SELECTOR, "#trash li"))
+        g = len(driver.find_elements(By.CSS_SELECTOR, "#gallery li"))
+        return t, g
 
     end = time.time() + 6
     while time.time() < end:
         t, g = counts()
-        if t == 1 and g == 3: break
+        if t == 1 and g == 3:
+            break
         time.sleep(0.2)
 
     t, g = counts()
