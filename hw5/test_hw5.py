@@ -1,4 +1,3 @@
-# hw5/test_hw5.py
 import os
 import time
 import pytest
